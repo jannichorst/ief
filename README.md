@@ -1,6 +1,6 @@
 # ief
 
-Runtime components and data structures that implement the Lean-Core Information Extraction (IE) pipeline spec.  See `spec_v_0.md` for the authoritative contract; the Python package in `ief/` provides:
+Runtime components and data structures that implement the Lean-Core Information Extraction (IE) pipeline spec. See `spec_v_0.md` for the authoritative contract; the Python package in `ief/` provides:
 
 - Typed artifact models (documents, text/layout layers, spans, mentions, key-value pairs, relations).
 - Task base classes with schema-aware parameter validation and provenance recording.
@@ -33,20 +33,12 @@ run = pipeline.run(extras={"environment": {"ief_version": "0.1"}})
 print(run.metrics)
 print(run.manifest.as_dict()["seed"])
 ```
-=======
-This repository explores a lean core for information extraction (IE)
-pipelines.  The `ief` Python package contains lightweight task metadata
-(`ief.core_tasks`) and helpers for standardised metric naming
-(`ief.utils`).  The goal is to keep the specification and reference code
-in sync so downstream components consistently emit metrics that align
-with §8 of `spec_v_0.md`.
+
+This repository also provides lightweight task metadata (`ief.core_tasks`) and helpers for standardised metric naming (`ief.utils`). The goal is to keep the specification and reference code in sync so downstream components consistently emit metrics that align with §8 of `spec_v_0.md`.
 
 ## Metrics naming helpers
 
-All metric keys emitted by the core tasks come from the shared constants
-in `ief.utils.MetricKeys` or from helper constructors such as
-`ief.utils.coverage_per_field`.  This ensures downstream collectors can
-rely on familiar names like `kv.coverage` instead of ad-hoc entries.
+All metric keys emitted by the core tasks come from the shared constants in `ief.utils.MetricKeys` or from helper constructors such as `ief.utils.coverage_per_field`. This ensures downstream collectors can rely on familiar names like `kv.coverage` instead of ad-hoc entries.
 
 ```python
 from ief.core_tasks import CORE_TASKS
@@ -65,5 +57,4 @@ kv.coverage - Fraction of canonical fields populated with a value.
 coverage.per_field.field - Use per-field coverage for individual canonical slots.
 ```
 
-Refer to the spec for the complete vocabulary of standard metric keys
-and for a broader discussion of the core tasks.
+Refer to the spec for the complete vocabulary of standard metric keys and for a broader discussion of the core tasks.

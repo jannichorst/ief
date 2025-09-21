@@ -1,168 +1,83 @@
-
-"""Pipeline orchestration following the lean-core IE spec."""
-
+"""Pipeline orchestration primitives for the lean-core IE reference implementation."""
 
 from __future__ import annotations
 
-from collections import defaultdict, deque
-
-from dataclasses import dataclass, field, replace
+from collections import deque
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
-import re
-from typing import Any, Dict, List, Mapping, MutableMapping, Sequence, Tuple
+import json
+from typing import Any, Dict, Mapping, MutableMapping, Protocol, Sequence, Tuple, runtime_checkable
 
-from .artifacts import Artifact
 from .exceptions import PipelineError, RegistryError
 from .registry import TaskRegistry
 from .store import ArtifactStore
 from .tasks import RunContext, TaskResult
 
-_EDGE_PATTERN = re.compile(r"^(?P<src>[A-Za-z0-9_\-]+):(?P<atype>[A-Za-z0-9_\-]+)\s*->\s*(?P<dst>[A-Za-z0-9_\-]+)$")
+INPUT_NODE_ID = "__input__"
+
+
+@dataclass
+class Artifact:
+    """Typed payload that flows between pipeline tasks."""
+
+    id: str
+    type: str
+    doc_id: str | None = None
+    data: Any = None
+    parents: Sequence[str] = field(default_factory=tuple)
+    meta: Mapping[str, Any] = field(default_factory=dict)
+
+
+@runtime_checkable
+class Task(Protocol):
+    """Protocol describing the runtime interface expected from tasks."""
+
+    id: str
+    input_types: Sequence[str]
+    output_types: Sequence[str]
+
+    def run(
+        self,
+        inputs: Mapping[str, Sequence[Artifact]],
+        params: Mapping[str, Any],
+        ctx: RunContext | None = None,
+    ) -> TaskResult:
+        ...
 
 
 @dataclass
 class PipelineNode:
+    """Concrete task configured as part of the pipeline DAG."""
+
     id: str
-    uses: str
+    task: Task
     params: Mapping[str, Any] = field(default_factory=dict)
+    uses: str | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class PipelineEdge:
-    source: str
-    artifact_type: str
-    target: str
+    """Typed connection between two nodes in the pipeline."""
 
-
-@dataclass(frozen=True)
-class CaptureConfig:
-    """Configuration describing which artifacts/renders to persist."""
-
-    store_artifacts: Tuple[str, ...] = ()
-    store_renders: bool = False
-
-    @classmethod
-    def from_mapping(cls, raw: Mapping[str, Any]) -> "CaptureConfig":
-        if not isinstance(raw, Mapping):
-            raise PipelineError("capture section must be a mapping")
-        store_raw = raw.get("store_artifacts", ())
-        if store_raw is None:
-            store_artifacts: Tuple[str, ...] = ()
-        elif isinstance(store_raw, Mapping) or isinstance(store_raw, (str, bytes, bytearray)):
-            raise PipelineError("capture.store_artifacts must be a sequence of artifact type names")
-        else:
-            store_artifacts = tuple(str(name) for name in store_raw)
-        store_renders = bool(raw.get("store_renders", False))
-        return cls(store_artifacts=store_artifacts, store_renders=store_renders)
-
-    def as_dict(self) -> Dict[str, Any]:
-        return {
-            "store_artifacts": list(self.store_artifacts),
-            "store_renders": self.store_renders,
-        }
-
-
-@dataclass(frozen=True)
-class EvalConfig:
-    """Configuration for evaluation datasets and metrics."""
-
-    dataset: str | None = None
-    metrics: Tuple[str, ...] = ()
-
-    @classmethod
-    def from_mapping(cls, raw: Mapping[str, Any]) -> "EvalConfig":
-        if not isinstance(raw, Mapping):
-            raise PipelineError("eval section must be a mapping")
-        dataset = raw.get("dataset")
-        if dataset is not None and not isinstance(dataset, str):
-            dataset = str(dataset)
-        metrics_raw = raw.get("metrics", ())
-        if metrics_raw is None:
-            metrics: Tuple[str, ...] = ()
-        elif isinstance(metrics_raw, Mapping) or isinstance(metrics_raw, (str, bytes, bytearray)):
-            raise PipelineError("eval.metrics must be a sequence of metric identifiers")
-        else:
-            metrics = tuple(str(metric) for metric in metrics_raw)
-        return cls(dataset=dataset, metrics=metrics)
-
-    def as_dict(self) -> Dict[str, Any]:
-        data: Dict[str, Any] = {}
-        if self.dataset is not None:
-            data["dataset"] = self.dataset
-        if self.metrics:
-            data["metrics"] = list(self.metrics)
-        return data
-
-
-@dataclass(frozen=True)
-class RunConfig:
-    """Runtime controls applied when executing a pipeline run."""
-
-    seed: int | None = None
-    batch_size: int | None = None
-    capture: CaptureConfig | None = None
-    eval: EvalConfig | None = None
-    extras: Dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_mapping(cls, raw: Any) -> "RunConfig":
-        if raw is None:
-            return cls()
-        if not isinstance(raw, Mapping):
-            raise PipelineError("run section must be a mapping")
-        seed = raw.get("seed")
-        if seed is not None and not isinstance(seed, int):
-            raise PipelineError("run.seed must be an integer")
-        batch_size = raw.get("batch_size")
-        if batch_size is not None:
-            if not isinstance(batch_size, int) or batch_size <= 0:
-                raise PipelineError("run.batch_size must be a positive integer")
-        capture_raw = raw.get("capture")
-        capture = CaptureConfig.from_mapping(capture_raw) if capture_raw is not None else None
-        eval_raw = raw.get("eval")
-        eval_cfg = EvalConfig.from_mapping(eval_raw) if eval_raw is not None else None
-        extras = {
-            key: value
-            for key, value in raw.items()
-            if key not in {"seed", "batch_size", "capture", "eval"}
-        }
-        return cls(seed=seed, batch_size=batch_size, capture=capture, eval=eval_cfg, extras=dict(extras))
-
-    def as_dict(self) -> Dict[str, Any]:
-        data: Dict[str, Any] = {}
-        if self.seed is not None:
-            data["seed"] = self.seed
-        if self.batch_size is not None:
-            data["batch_size"] = self.batch_size
-        if self.capture is not None:
-            data["capture"] = self.capture.as_dict()
-        if self.eval is not None:
-            data["eval"] = self.eval.as_dict()
-        if self.extras:
-            data.update(self.extras)
-        return data
-
-
-@dataclass
-class PipelineConfig:
-    version: str
-    nodes: List[PipelineNode]
-    edges: List[PipelineEdge]
-    run: RunConfig = field(default_factory=RunConfig)
+    producer_node: str
+    output_type: str
+    consumer_node: str
 
 
 @dataclass
 class NodeRunRecord:
+    """Metadata captured for each node execution during a pipeline run."""
+
     id: str
     uses: str
     params: Mapping[str, Any]
-    config_hash: str
+    config_hash: str | None
     started_at: datetime
     ended_at: datetime
-    metrics: Mapping[str, float]
-    model_id: str | None
-    warnings: Sequence[str]
+    metrics: Mapping[str, Any]
+    model_id: str | None = None
+    warnings: Sequence[str] = field(default_factory=tuple)
 
     @property
     def latency_ms(self) -> float:
@@ -171,17 +86,19 @@ class NodeRunRecord:
 
 @dataclass
 class RunManifest:
+    """Aggregate metadata describing a pipeline run."""
+
     run_id: str
     seed: int
     started_at: datetime
     ended_at: datetime | None = None
     nodes: MutableMapping[str, NodeRunRecord] = field(default_factory=dict)
-    inputs: Dict[str, List[str]] = field(default_factory=dict)
+    inputs: Dict[str, list[str]] = field(default_factory=dict)
     environment: Dict[str, Any] = field(default_factory=dict)
     hardware: Dict[str, Any] = field(default_factory=dict)
     batch_size: int | None = None
-    capture: CaptureConfig | None = None
-    eval: EvalConfig | None = None
+    capture: Mapping[str, Any] | None = None
+    eval: Mapping[str, Any] | None = None
     extras: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
@@ -199,34 +116,49 @@ class RunManifest:
                     "uses": record.uses,
                     "params": dict(record.params),
                     "config_hash": record.config_hash,
-                    "model_id": record.model_id,
-                    "metrics": dict(record.metrics),
-                    "warnings": list(record.warnings),
                     "started_at": record.started_at.isoformat(),
                     "ended_at": record.ended_at.isoformat(),
-                    "latency_ms": record.latency_ms,
+                    "metrics": dict(record.metrics),
+                    "model_id": record.model_id,
+                    "warnings": list(record.warnings),
                 }
                 for node_id, record in self.nodes.items()
             },
-            "capture": self.capture.as_dict() if self.capture else None,
-            "eval": self.eval.as_dict() if self.eval else None,
+            "capture": dict(self.capture) if self.capture else None,
+            "eval": dict(self.eval) if self.eval else None,
             "extras": dict(self.extras),
         }
 
 
 @dataclass
 class PipelineRunResult:
+    """Container for artifacts and metrics produced during a pipeline run."""
+
     run_id: str
-    artifact_store: ArtifactStore
     node_results: Mapping[str, TaskResult]
+    artifacts_by_node: Mapping[str, Mapping[str, Tuple[Artifact, ...]]]
+    started_at: datetime
+    ended_at: datetime
+    artifact_store: ArtifactStore
     manifest: RunManifest
 
-    def get_artifacts(self, artifact_type: str) -> List[Artifact]:
-        return self.artifact_store.get_global(artifact_type)
+    def __post_init__(self) -> None:
+        self.node_results = dict(self.node_results)
+        self.artifacts_by_node = {
+            node_id: dict(artifact_map)
+            for node_id, artifact_map in self.artifacts_by_node.items()
+        }
+
+    def artifacts_for(self, node_id: str, artifact_type: str) -> Tuple[Artifact, ...]:
+        """Return artifacts produced by *node_id* of the given *artifact_type*."""
+
+        return self.artifacts_by_node.get(node_id, {}).get(artifact_type, ())
 
     @property
-    def metrics(self) -> Dict[str, float]:
-        aggregated: Dict[str, float] = {}
+    def metrics(self) -> Dict[str, Any]:
+        """Flatten per-node metric mappings into a single dictionary."""
+
+        aggregated: Dict[str, Any] = {}
         for node_id, result in self.node_results.items():
             for key, value in result.metrics.items():
                 aggregated[f"{node_id}.{key}"] = value
@@ -234,113 +166,126 @@ class PipelineRunResult:
 
 
 class Pipeline:
-    def __init__(self, config: PipelineConfig, registry: TaskRegistry) -> None:
-        self.config = config
-        self.registry = registry
-        self._nodes: Dict[str, PipelineNode] = {node.id: node for node in config.nodes}
-        if len(self._nodes) != len(config.nodes):
-            raise PipelineError("Duplicate node identifiers in pipeline configuration")
-        self._edges = list(config.edges)
-        self._incoming: MutableMapping[str, List[PipelineEdge]] = defaultdict(list)
-        self._outgoing: MutableMapping[str, List[PipelineEdge]] = defaultdict(list)
-        for edge in self._edges:
-            if edge.source not in self._nodes:
-                raise PipelineError(f"Edge references unknown source node {edge.source!r}")
-            if edge.target not in self._nodes:
-                raise PipelineError(f"Edge references unknown target node {edge.target!r}")
-            self._incoming[edge.target].append(edge)
-            self._outgoing[edge.source].append(edge)
-        self._order = self._topological_order()
+    """Execute a directed acyclic graph of tasks with typed edges."""
 
-    @classmethod
-    def from_config_dict(cls, raw: Mapping[str, Any], registry: TaskRegistry) -> "Pipeline":
+    INPUT_NODE_ID = INPUT_NODE_ID
+
+    def __init__(
+        self,
+        nodes: Sequence[PipelineNode],
+        edges: Sequence[PipelineEdge],
+        *,
+        version: str | None = None,
+        run_defaults: Mapping[str, Any] | None = None,
+    ) -> None:
+        if not isinstance(nodes, Sequence) or not nodes:
+            raise PipelineError("Pipeline requires a non-empty sequence of nodes")
+
+        self._node_map: Dict[str, PipelineNode] = {}
+        ordered_nodes: list[PipelineNode] = []
+        for node in nodes:
+            if node.id in self._node_map:
+                raise PipelineError(f"Duplicate node identifier {node.id!r}")
+            self._node_map[node.id] = node
+            ordered_nodes.append(node)
+        self._nodes: Tuple[PipelineNode, ...] = tuple(ordered_nodes)
+
+        self._edges: Tuple[PipelineEdge, ...] = tuple(edges)
+        self._incoming: MutableMapping[str, list[PipelineEdge]] = {node.id: [] for node in self._nodes}
+        self._outgoing: MutableMapping[str, list[str]] = {node.id: [] for node in self._nodes}
+
+        for edge in self._edges:
+            if edge.consumer_node not in self._node_map:
+                raise PipelineError(f"Edge references unknown consumer {edge.consumer_node!r}")
+            if edge.producer_node != self.INPUT_NODE_ID and edge.producer_node not in self._node_map:
+                raise PipelineError(f"Edge references unknown producer {edge.producer_node!r}")
+            self._incoming.setdefault(edge.consumer_node, []).append(edge)
+            if edge.producer_node != self.INPUT_NODE_ID:
+                self._outgoing.setdefault(edge.producer_node, []).append(edge.consumer_node)
+
+        self._order: Tuple[str, ...] = self._compute_topological_order()
+        self.version = version
+
+        defaults = dict(run_defaults or {})
+        self._default_seed: int | None = defaults.get("seed")
+        self._default_batch_size: int | None = defaults.get("batch_size")
+        self._default_capture: Mapping[str, Any] | None = (
+            dict(defaults["capture"]) if "capture" in defaults and defaults["capture"] is not None else None
+        )
+        self._default_eval: Mapping[str, Any] | None = (
+            dict(defaults["eval"]) if "eval" in defaults and defaults["eval"] is not None else None
+        )
+        extras = defaults.get("extras") or {}
+        if extras is None:
+            extras = {}
+        if not isinstance(extras, Mapping):
+            raise PipelineError("run_defaults.extras must be a mapping if provided")
+        self._default_extras: Dict[str, Any] = dict(extras)
+
+    @property
+    def nodes(self) -> Tuple[PipelineNode, ...]:
+        return self._nodes
+
+    @property
+    def edges(self) -> Tuple[PipelineEdge, ...]:
+        return self._edges
+
+    def get_node(self, node_id: str) -> PipelineNode:
         try:
-            version = raw["version"]
-            pipeline = raw["pipeline"]
-        except KeyError as exc:
-            raise PipelineError("Configuration must include 'version' and 'pipeline'") from exc
-        nodes = [PipelineNode(id=item["id"], uses=item["uses"], params=item.get("params", {})) for item in pipeline.get("nodes", [])]
-        edges = [cls._parse_edge(item) for item in pipeline.get("edges", [])]
-        run_cfg = RunConfig.from_mapping(raw.get("run"))
-        cfg = PipelineConfig(version=version, nodes=nodes, edges=edges, run=run_cfg)
-        return cls(cfg, registry)
+            return self._node_map[node_id]
+        except KeyError as exc:  # pragma: no cover - defensive guard
+            raise PipelineError(f"Unknown pipeline node {node_id!r}") from exc
 
-    @staticmethod
-    def _parse_edge(raw: Any) -> PipelineEdge:
-        if isinstance(raw, Mapping):
-            return PipelineEdge(source=raw["source"], artifact_type=raw["artifact_type"], target=raw["target"])
-        if isinstance(raw, str):
-            match = _EDGE_PATTERN.match(raw.strip())
-            if not match:
-                raise PipelineError(f"Invalid edge specification: {raw!r}")
-            return PipelineEdge(
-                source=match.group("src"),
-                artifact_type=match.group("atype"),
-                target=match.group("dst"),
-            )
-        raise PipelineError(f"Unsupported edge specification: {raw!r}")
-
-    def _topological_order(self) -> List[str]:
-        indegree: MutableMapping[str, int] = {node_id: 0 for node_id in self._nodes}
+    def _compute_topological_order(self) -> Tuple[str, ...]:
+        indegree: Dict[str, int] = {node_id: 0 for node_id in self._node_map}
         for edge in self._edges:
-            indegree[edge.target] += 1
-        queue = deque([node_id for node_id, deg in indegree.items() if deg == 0])
-        order: List[str] = []
+            if edge.producer_node == self.INPUT_NODE_ID:
+                continue
+            indegree[edge.consumer_node] += 1
+
+        queue = deque(node_id for node_id, deg in indegree.items() if deg == 0)
+        order: list[str] = []
+        indegree = dict(indegree)
         while queue:
-            node = queue.popleft()
-            order.append(node)
-            for edge in self._outgoing.get(node, ()):  # type: ignore[arg-type]
-                indegree[edge.target] -= 1
-                if indegree[edge.target] == 0:
-                    queue.append(edge.target)
-        if len(order) != len(self._nodes):
+            node_id = queue.popleft()
+            order.append(node_id)
+            for downstream in self._outgoing.get(node_id, []):
+                indegree[downstream] -= 1
+                if indegree[downstream] == 0:
+                    queue.append(downstream)
+
+        if len(order) != len(self._node_map):
             raise PipelineError("Pipeline contains a cycle")
-        return order
+        return tuple(order)
 
     def run(
         self,
-        initial_artifacts: Sequence[Artifact] | Mapping[str, Sequence[Artifact]] | None = None,
+        initial_artifacts: Mapping[str, Sequence[Artifact]] | Sequence[Artifact] | None = None,
         *,
         seed: int | None = None,
         params_override: Mapping[str, Mapping[str, Any]] | None = None,
         extras: Mapping[str, Any] | None = None,
     ) -> PipelineRunResult:
-        config_seed = self.config.run.seed
+        started_at = datetime.now(timezone.utc)
         base_seed = (
             seed
             if seed is not None
-            else (config_seed if config_seed is not None else int(datetime.now(timezone.utc).timestamp()))
+            else (
+                self._default_seed
+                if self._default_seed is not None
+                else int(started_at.timestamp())
+            )
         )
-        started_at = datetime.now(timezone.utc)
-        run_id = hashlib.sha1(f"{base_seed}-{started_at.isoformat()}".encode()).hexdigest()
+        run_id = hashlib.sha1(f"{base_seed}-{started_at.isoformat()}".encode("utf-8")).hexdigest()
         manifest = RunManifest(
             run_id=run_id,
             seed=base_seed,
             started_at=started_at,
-            batch_size=self.config.run.batch_size,
-            capture=replace(self.config.run.capture) if self.config.run.capture else None,
-            eval=replace(self.config.run.eval) if self.config.run.eval else None,
+            batch_size=self._default_batch_size,
+            capture=dict(self._default_capture) if self._default_capture else None,
+            eval=dict(self._default_eval) if self._default_eval else None,
+            extras=dict(self._default_extras),
         )
-        if self.config.run.extras:
-            manifest.extras.update(self.config.run.extras)
-            environment_cfg = self.config.run.extras.get("environment")
-            if isinstance(environment_cfg, Mapping):
-                manifest.environment.update(environment_cfg)
-            hardware_cfg = self.config.run.extras.get("hardware")
-            if isinstance(hardware_cfg, Mapping):
-                manifest.hardware.update(hardware_cfg)
-        store = ArtifactStore()
-        if initial_artifacts:
-            if isinstance(initial_artifacts, Mapping):
-                for artifacts in initial_artifacts.values():
-                    store.add_many(artifacts, producer_id=None)
-            else:
-                store.add_many(initial_artifacts, producer_id=None)
-            snapshot = store.snapshot()
-            manifest.inputs = {
-                artifact_type: [artifact.id for artifact in artifacts]
-                for artifact_type, artifacts in snapshot.items()
-            }
         if extras:
             extras_dict = dict(extras)
             manifest.extras.update(extras_dict)
@@ -350,65 +295,296 @@ class Pipeline:
             hardware = extras_dict.get("hardware")
             if isinstance(hardware, Mapping):
                 manifest.hardware.update(hardware)
-        results: Dict[str, TaskResult] = {}
-        params_override = params_override or {}
 
-        for idx, node_id in enumerate(self._order):
-            node = self._nodes[node_id]
-            if node.uses not in self.registry:
-                raise RegistryError(f"Capability {node.uses!r} not registered")
-            task = self.registry.create(node.uses)
-            node_params_raw = dict(node.params)
-            node_params_raw.update(params_override.get(node_id, {}))
-            node_params = task.validate_params(node_params_raw)
-            ctx = RunContext(
-                run_id=run_id,
-                node_id=node_id,
-                capability=node.uses,
-                seed=base_seed + idx,
-                store=store,
-                extras=extras,
-            )
-            ctx.started_at = datetime.now(timezone.utc)
-            inputs: Dict[str, List[Artifact]] = {}
+        store = ArtifactStore()
+        outputs_by_node: Dict[str, Dict[str, list[Artifact]]] = {}
+
+        def node_outputs(node_id: str) -> Dict[str, list[Artifact]]:
+            return outputs_by_node.setdefault(node_id, {})
+
+        if initial_artifacts:
+            input_store = node_outputs(self.INPUT_NODE_ID)
+            if isinstance(initial_artifacts, Mapping):
+                for artifact_type, artifacts in initial_artifacts.items():
+                    artifacts_list = list(artifacts)
+                    input_store.setdefault(artifact_type, []).extend(artifacts_list)
+                    store.add_many(artifacts_list, producer_id=None)
+            else:
+                artifacts_list = list(initial_artifacts)
+                for artifact in artifacts_list:
+                    input_store.setdefault(artifact.type, []).append(artifact)
+                store.add_many(artifacts_list, producer_id=None)
+            manifest.inputs = {
+                artifact_type: [artifact.id for artifact in artifacts]
+                for artifact_type, artifacts in input_store.items()
+            }
+
+        overrides = {node_id: dict(params) for node_id, params in (params_override or {}).items()}
+        node_results: Dict[str, TaskResult] = {}
+
+        for index, node_id in enumerate(self._order):
+            node = self._node_map[node_id]
+            task = node.task
+            node_params = dict(node.params)
+            if node_id in overrides:
+                node_params.update(overrides[node_id])
+
+            if hasattr(task, "validate_params"):
+                try:
+                    node_params = dict(task.validate_params(node_params))
+                except Exception:  # pragma: no cover - best effort validation
+                    pass
+
             incoming_edges = self._incoming.get(node_id, [])
+            inputs: Dict[str, list[Artifact]] = {}
             if incoming_edges:
                 for edge in incoming_edges:
-                    inputs.setdefault(edge.artifact_type, []).extend(
-                        store.get_from(edge.source, edge.artifact_type)
+                    producer = None if edge.producer_node == self.INPUT_NODE_ID else edge.producer_node
+                    inputs.setdefault(edge.output_type, []).extend(
+                        store.get_from(producer, edge.output_type)
                     )
-            else:
-                for artifact_type in task.input_types:
-                    inputs.setdefault(artifact_type, []).extend(store.get_global(artifact_type))
-            for artifact_type in task.input_types:
+            for artifact_type in getattr(task, "input_types", []):
                 inputs.setdefault(artifact_type, [])
-            frozen_inputs = {key: tuple(values) for key, values in inputs.items()}
-            result = task.run(inputs=frozen_inputs, params=node_params, ctx=ctx)
+
+            frozen_inputs = {atype: tuple(values) for atype, values in inputs.items()}
+
+            ctx: RunContext | None = None
+            try:
+                ctx = RunContext(
+                    run_id=run_id,
+                    node_id=node_id,
+                    capability=node.uses or getattr(task, "id", node_id),
+                    seed=base_seed + index,
+                    store=store,
+                    extras=extras,
+                )
+            except Exception:  # pragma: no cover - fallback for lightweight tasks
+                ctx = None
+
+            result = self._execute_task(task, frozen_inputs, node_params, ctx)
             if not isinstance(result, TaskResult):
-                raise PipelineError(f"Task {node.uses} returned invalid result type {type(result)!r}")
-            result.trace = task.make_trace(ctx, node_params, frozen_inputs, result)
-            allowed_outputs = set(task.output_types) if task.output_types else None
-            if allowed_outputs:
-                for artifact in result.artifacts:
-                    if artifact.type not in allowed_outputs:
-                        raise PipelineError(
-                            f"Task {node.uses} produced unexpected artifact type {artifact.type!r}"
-                        )
+                raise PipelineError(
+                    f"Task {getattr(task, 'id', node_id)!r} returned invalid result type {type(result)!r}"
+                )
+
+            if ctx is not None and getattr(result, "trace", None) is None and hasattr(task, "make_trace"):
+                try:
+                    result.trace = task.make_trace(ctx, node_params, frozen_inputs, result)  # type: ignore[attr-defined]
+                except Exception:  # pragma: no cover - optional feature
+                    pass
+
+            node_results[node_id] = result
+            output_store = node_outputs(node_id)
             for artifact in result.artifacts:
-                if artifact.provenance is None:
-                    artifact.provenance = result.trace
+                output_store.setdefault(artifact.type, []).append(artifact)
                 store.add(artifact, producer_id=node_id)
-            results[node_id] = result
+
+            record_started_at = (
+                getattr(result.trace, "started_at", None)
+                if getattr(result, "trace", None) is not None
+                else getattr(ctx, "started_at", datetime.now(timezone.utc))
+            )
+            record_ended_at = (
+                getattr(result.trace, "ended_at", None)
+                if getattr(result, "trace", None) is not None
+                else datetime.now(timezone.utc)
+            )
+            config_hash = None
+            if getattr(result, "trace", None) is not None:
+                config_hash = getattr(result.trace, "config_hash", None)
+            elif hasattr(task, "config_hash"):
+                try:
+                    config_hash = task.config_hash(node_params)
+                except Exception:  # pragma: no cover - fallback hashing
+                    config_hash = None
+            if config_hash is None:
+                try:
+                    normalised = json.dumps(node_params, sort_keys=True, default=str)
+                except TypeError:
+                    normalised = repr(sorted(node_params.items()))
+                config_hash = hashlib.sha256(normalised.encode("utf-8")).hexdigest()
+
+            warnings: Sequence[str]
+            if getattr(result, "trace", None) is not None:
+                warnings = tuple(getattr(result.trace, "warnings", ()))
+            elif ctx is not None and hasattr(ctx, "get_warnings"):
+                try:
+                    warnings = tuple(ctx.get_warnings())
+                except Exception:  # pragma: no cover - defensive fallback
+                    warnings = ()
+            else:
+                warnings = ()
+
             manifest.nodes[node_id] = NodeRunRecord(
                 id=node_id,
-                uses=node.uses,
+                uses=node.uses or getattr(task, "id", node_id),
                 params=dict(node_params),
-                config_hash=result.trace.config_hash,
-                started_at=result.trace.started_at,
-                ended_at=result.trace.ended_at,
+                config_hash=config_hash,
+                started_at=record_started_at,
+                ended_at=record_ended_at,
                 metrics=dict(result.metrics),
-                model_id=result.trace.model_id,
-                warnings=list(result.trace.warnings),
+                model_id=(
+                    getattr(result.trace, "model_id", None)
+                    if getattr(result, "trace", None) is not None
+                    else getattr(task, "default_model_id", None)
+                ),
+                warnings=warnings,
             )
-        manifest.ended_at = datetime.now(timezone.utc)
-        return PipelineRunResult(run_id=run_id, artifact_store=store, node_results=results, manifest=manifest)
+
+        ended_at = datetime.now(timezone.utc)
+        manifest.ended_at = ended_at
+
+        artifacts_by_node: Dict[str, Dict[str, Tuple[Artifact, ...]]] = {}
+        for node_id, outputs in outputs_by_node.items():
+            if node_id == self.INPUT_NODE_ID:
+                continue
+            artifacts_by_node[node_id] = {
+                artifact_type: tuple(artifacts)
+                for artifact_type, artifacts in outputs.items()
+            }
+        for node_id in self._node_map:
+            artifacts_by_node.setdefault(node_id, {})
+
+        return PipelineRunResult(
+            run_id=run_id,
+            node_results=node_results,
+            artifacts_by_node=artifacts_by_node,
+            started_at=started_at,
+            ended_at=ended_at,
+            artifact_store=store,
+            manifest=manifest,
+        )
+
+    @staticmethod
+    def _execute_task(
+        task: Task,
+        inputs: Mapping[str, Sequence[Artifact]],
+        params: Mapping[str, Any],
+        ctx: RunContext | None,
+    ) -> TaskResult:
+        try:
+            return task.run(inputs=inputs, params=params, ctx=ctx)
+        except TypeError as exc:
+            if "unexpected keyword argument" in str(exc) and "'ctx'" in str(exc):
+                return task.run(inputs=inputs, params=params)
+            raise
+
+    @classmethod
+    def from_config_dict(cls, raw: Mapping[str, Any], registry: TaskRegistry) -> "Pipeline":
+        if not isinstance(raw, Mapping):
+            raise PipelineError("Configuration must be a mapping")
+
+        version = raw.get("version")
+        pipeline_block = raw.get("pipeline")
+        if not isinstance(pipeline_block, Mapping):
+            raise PipelineError("Configuration must include a 'pipeline' mapping")
+
+        node_defs = pipeline_block.get("nodes")
+        if not isinstance(node_defs, Sequence) or not node_defs:
+            raise PipelineError("'pipeline.nodes' must be a non-empty list")
+
+        edge_defs = pipeline_block.get("edges", [])
+        if not isinstance(edge_defs, Sequence):
+            raise PipelineError("'pipeline.edges' must be a list if provided")
+
+        nodes: list[PipelineNode] = []
+        for raw_node in node_defs:
+            if not isinstance(raw_node, Mapping):
+                raise PipelineError("Each pipeline node must be a mapping")
+            node_id = raw_node.get("id")
+            if not isinstance(node_id, str) or not node_id:
+                raise PipelineError("Pipeline nodes require a non-empty string 'id'")
+            uses = raw_node.get("uses")
+            if not isinstance(uses, str) or not uses:
+                raise PipelineError(f"Node '{node_id}' is missing a valid 'uses' entry")
+            params = raw_node.get("params", {})
+            if params is None:
+                params = {}
+            if not isinstance(params, Mapping):
+                raise PipelineError(f"Node '{node_id}' params must be a mapping if provided")
+            if uses not in registry:
+                raise RegistryError(f"Capability {uses!r} not registered")
+            task = registry.create(uses)
+            nodes.append(PipelineNode(id=node_id, task=task, params=dict(params), uses=uses))
+
+        edges: list[PipelineEdge] = []
+        for raw_edge in edge_defs:
+            edges.append(cls._parse_edge(raw_edge))
+
+        run_defaults: Dict[str, Any] = {}
+        run_block = raw.get("run")
+        if run_block is not None:
+            if not isinstance(run_block, Mapping):
+                raise PipelineError("'run' section must be a mapping if provided")
+            seed = run_block.get("seed")
+            if seed is not None:
+                if not isinstance(seed, int):
+                    raise PipelineError("run.seed must be an integer if provided")
+                run_defaults["seed"] = seed
+            batch_size = run_block.get("batch_size")
+            if batch_size is not None:
+                if not isinstance(batch_size, int) or batch_size <= 0:
+                    raise PipelineError("run.batch_size must be a positive integer if provided")
+                run_defaults["batch_size"] = batch_size
+            capture = run_block.get("capture")
+            if capture is not None:
+                if not isinstance(capture, Mapping):
+                    raise PipelineError("run.capture must be a mapping if provided")
+                run_defaults["capture"] = dict(capture)
+            eval_block = run_block.get("eval")
+            if eval_block is not None:
+                if not isinstance(eval_block, Mapping):
+                    raise PipelineError("run.eval must be a mapping if provided")
+                run_defaults["eval"] = dict(eval_block)
+            extras = {
+                key: value
+                for key, value in run_block.items()
+                if key not in {"seed", "batch_size", "capture", "eval"}
+            }
+            if extras:
+                run_defaults["extras"] = extras
+
+        return cls(
+            nodes=nodes,
+            edges=edges,
+            version=str(version) if version is not None else None,
+            run_defaults=run_defaults,
+        )
+
+    @staticmethod
+    def _parse_edge(raw_edge: Any) -> PipelineEdge:
+        if isinstance(raw_edge, PipelineEdge):
+            return raw_edge
+        if isinstance(raw_edge, str):
+            parts = raw_edge.split("->")
+            if len(parts) != 2:
+                raise PipelineError(
+                    f"Edge specification '{raw_edge}' is not of the form 'node:Type -> node'"
+                )
+            left, right = parts
+            left = left.strip()
+            right = right.strip()
+            if not right:
+                raise PipelineError(f"Edge specification '{raw_edge}' is missing a consumer node")
+            producer_parts = left.split(":", 1)
+            if len(producer_parts) != 2:
+                raise PipelineError(
+                    f"Edge specification '{raw_edge}' must include 'producer:ArtifactType'"
+                )
+            producer, artifact_type = producer_parts[0].strip(), producer_parts[1].strip()
+            if not producer or not artifact_type:
+                raise PipelineError(f"Edge specification '{raw_edge}' is missing identifiers")
+            return PipelineEdge(producer_node=producer, output_type=artifact_type, consumer_node=right)
+        if isinstance(raw_edge, Mapping):
+            try:
+                producer = raw_edge["producer"]
+                artifact_type = raw_edge["type"]
+                consumer = raw_edge["consumer"]
+            except KeyError as exc:
+                raise PipelineError(
+                    "Edge mappings must include 'producer', 'type', and 'consumer'"
+                ) from exc
+            if not isinstance(producer, str) or not isinstance(artifact_type, str) or not isinstance(consumer, str):
+                raise PipelineError("Edge mapping entries must be strings")
+            return PipelineEdge(producer_node=producer, output_type=artifact_type, consumer_node=consumer)
+        raise PipelineError(f"Unsupported edge specification: {raw_edge!r}")

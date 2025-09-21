@@ -1,9 +1,6 @@
-"""Core runtime components for the Lean-Core Information Extraction pipeline.
+"""Core runtime components for the Lean-Core Information Extraction pipeline."""
 
-This package provides Python building blocks that follow the contracts laid out
-in ``spec_v_0.md``.  The goal is to make it straightforward to wire together
-typed tasks inside a DAG, while keeping artifacts and provenance traceable.
-"""
+from __future__ import annotations
 
 from .artifacts import (
     Artifact,
@@ -23,16 +20,12 @@ from .artifacts import (
     TextToken,
 )
 from .pipeline import (
-    CaptureConfig,
-    EvalConfig,
-    NodeRunRecord,
+    INPUT_NODE_ID,
     Pipeline,
-    PipelineConfig,
     PipelineEdge,
+    PipelineError,
     PipelineNode,
     PipelineRunResult,
-    RunConfig,
-    RunManifest,
 )
 from .registry import TaskRegistry
 from .tasks import RunContext, Task, TaskResult
@@ -44,21 +37,17 @@ __all__ = [
     "Document",
     "DocumentSource",
     "EntityMention",
+    "INPUT_NODE_ID",
     "KVPair",
     "LayoutElement",
     "LayoutLayer",
     "PageBox",
     "PageGeometry",
     "Pipeline",
-    "PipelineConfig",
     "PipelineEdge",
+    "PipelineError",
     "PipelineNode",
     "PipelineRunResult",
-    "RunConfig",
-    "RunManifest",
-    "CaptureConfig",
-    "EvalConfig",
-    "NodeRunRecord",
     "RunContext",
     "SpanRef",
     "Task",
@@ -68,4 +57,3 @@ __all__ = [
     "TextToken",
     "Trace",
 ]
-
