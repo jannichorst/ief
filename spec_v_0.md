@@ -15,7 +15,15 @@
 ---
 
 ## 2) Core Artifact Types (lean set)
-> All artifacts carry `id`, `type`, `doc_id`, `parents[]`, `meta{}`.
+> All artifacts carry `id`, `type`, `doc_id`, `parents[]`, `meta{}` (artifact-level metadata).
+
+### 2.0 Artifact Metadata Conventions
+- `meta.method?`: `{type, name, version, provider, config_ref?}` for describing the producing method (e.g., `llm`, `regex`, `crf`).
+- `meta.misc?`: free-form object for additional contextual details (prompts, checkpoints, pipeline tags).
+- `meta.probability?`: float in `[0, 1]`; populated when the method produces a calibrated prediction probability (regex/rule systems may omit).
+- `meta.reasoning?`: string or structured object with model reasoning or task rationale. Generative methods SHOULD populate this to explain extractions or task framing.
+
+Extraction artifacts that already expose `score` retain it; populate `meta.probability` (and optionally mirror to a top-level `probability?`) when a calibrated probability is available so `score` semantics stay method-specific.
 
 ### 2.1 Document
 - `doc_id`: string
@@ -40,6 +48,8 @@
 - `text`: raw surface string
 - `span: SpanRef`
 - `score`: float
+- `probability?`: float `[0, 1]` (optional calibrated probability; prefer `meta.probability` when carrying both score and probability)
+- `reasoning?`: string|list|dict (alias for `meta.reasoning` when surfaced at top level by generative methods)
 - `evidence[]`: SpanRef|feature keys
 
 ### 2.6 KVPair (core)
@@ -47,11 +57,15 @@
 - `field`: canonical field name
 - `normalized_value?`
 - `score`
+- `probability?`: float `[0, 1]`
+- `reasoning?`: string|list|dict (generative explanation optional)
 
 ### 2.7 Relation (core)
 - `type`: string
 - `args[]`: {role, mention_id}
 - `score`, `evidence[]`
+- `probability?`: float `[0, 1]`
+- `reasoning?`: string|list|dict (generative explanation optional)
 
 ### 2.8 Trace / Provenance (core)
 - `run_id`, `task_id`, `model_id`, `config_hash`, `time{start,end}`

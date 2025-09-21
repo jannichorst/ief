@@ -1,8 +1,11 @@
+
 """Pipeline orchestration following the lean-core IE spec."""
+
 
 from __future__ import annotations
 
 from collections import defaultdict, deque
+
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import hashlib
@@ -209,6 +212,70 @@ class RunManifest:
             "eval": self.eval.as_dict() if self.eval else None,
             "extras": dict(self.extras),
         }
+=======
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, Mapping, Optional, Protocol, Sequence, runtime_checkable
+
+
+class PipelineError(RuntimeError):
+    """Raised when the pipeline definition or execution is invalid."""
+
+
+@dataclass
+class Artifact:
+    """A minimal representation of a typed artifact flowing through the pipeline."""
+
+    id: str
+    type: str
+    doc_id: Optional[str] = None
+    data: Any = None
+    parents: Sequence[str] = field(default_factory=tuple)
+    meta: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class TaskResult:
+    """Result returned by an individual task execution."""
+
+    artifacts: Sequence[Artifact] = field(default_factory=tuple)
+    metrics: Mapping[str, Any] = field(default_factory=dict)
+    trace: Mapping[str, Any] = field(default_factory=dict)
+
+
+@runtime_checkable
+class Task(Protocol):
+    """Minimal protocol describing a runnable task within the pipeline."""
+
+    id: str
+    input_types: Sequence[str]
+    output_types: Sequence[str]
+
+    def run(
+        self,
+        inputs: Mapping[str, Sequence[Artifact]],
+        params: Mapping[str, Any],
+        ctx: Optional[Any] = None,
+    ) -> TaskResult:
+        ...
+
+
+@dataclass
+class PipelineNode:
+    """A node in the pipeline DAG wrapping a configured task instance."""
+
+    id: str
+    task: Task
+    params: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PipelineEdge:
+    """A typed connection between two pipeline nodes."""
+
+    producer_node: str
+    output_type: str
+    consumer_node: str
+
 
 
 @dataclass
