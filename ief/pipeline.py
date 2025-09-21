@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import hashlib
 import re
-from typing import Any, Dict, List, Mapping, MutableMapping, Sequence
+from typing import Any, Dict, List, Mapping, MutableMapping, Sequence, Tuple
 
 from .artifacts import Artifact
 from .exceptions import PipelineError, RegistryError
@@ -32,12 +32,121 @@ class PipelineEdge:
     target: str
 
 
+@dataclass(frozen=True)
+class CaptureConfig:
+    """Configuration describing which artifacts/renders to persist."""
+
+    store_artifacts: Tuple[str, ...] = ()
+    store_renders: bool = False
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> "CaptureConfig":
+        if not isinstance(raw, Mapping):
+            raise PipelineError("capture section must be a mapping")
+        store_raw = raw.get("store_artifacts", ())
+        if store_raw is None:
+            store_artifacts: Tuple[str, ...] = ()
+        elif isinstance(store_raw, Mapping) or isinstance(store_raw, (str, bytes, bytearray)):
+            raise PipelineError("capture.store_artifacts must be a sequence of artifact type names")
+        else:
+            store_artifacts = tuple(str(name) for name in store_raw)
+        store_renders = bool(raw.get("store_renders", False))
+        return cls(store_artifacts=store_artifacts, store_renders=store_renders)
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "store_artifacts": list(self.store_artifacts),
+            "store_renders": self.store_renders,
+        }
+
+
+@dataclass(frozen=True)
+class EvalConfig:
+    """Configuration for evaluation datasets and metrics."""
+
+    dataset: str | None = None
+    metrics: Tuple[str, ...] = ()
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> "EvalConfig":
+        if not isinstance(raw, Mapping):
+            raise PipelineError("eval section must be a mapping")
+        dataset = raw.get("dataset")
+        if dataset is not None and not isinstance(dataset, str):
+            dataset = str(dataset)
+        metrics_raw = raw.get("metrics", ())
+        if metrics_raw is None:
+            metrics: Tuple[str, ...] = ()
+        elif isinstance(metrics_raw, Mapping) or isinstance(metrics_raw, (str, bytes, bytearray)):
+            raise PipelineError("eval.metrics must be a sequence of metric identifiers")
+        else:
+            metrics = tuple(str(metric) for metric in metrics_raw)
+        return cls(dataset=dataset, metrics=metrics)
+
+    def as_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {}
+        if self.dataset is not None:
+            data["dataset"] = self.dataset
+        if self.metrics:
+            data["metrics"] = list(self.metrics)
+        return data
+
+
+@dataclass(frozen=True)
+class RunConfig:
+    """Runtime controls applied when executing a pipeline run."""
+
+    seed: int | None = None
+    batch_size: int | None = None
+    capture: CaptureConfig | None = None
+    eval: EvalConfig | None = None
+    extras: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_mapping(cls, raw: Any) -> "RunConfig":
+        if raw is None:
+            return cls()
+        if not isinstance(raw, Mapping):
+            raise PipelineError("run section must be a mapping")
+        seed = raw.get("seed")
+        if seed is not None and not isinstance(seed, int):
+            raise PipelineError("run.seed must be an integer")
+        batch_size = raw.get("batch_size")
+        if batch_size is not None:
+            if not isinstance(batch_size, int) or batch_size <= 0:
+                raise PipelineError("run.batch_size must be a positive integer")
+        capture_raw = raw.get("capture")
+        capture = CaptureConfig.from_mapping(capture_raw) if capture_raw is not None else None
+        eval_raw = raw.get("eval")
+        eval_cfg = EvalConfig.from_mapping(eval_raw) if eval_raw is not None else None
+        extras = {
+            key: value
+            for key, value in raw.items()
+            if key not in {"seed", "batch_size", "capture", "eval"}
+        }
+        return cls(seed=seed, batch_size=batch_size, capture=capture, eval=eval_cfg, extras=dict(extras))
+
+    def as_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {}
+        if self.seed is not None:
+            data["seed"] = self.seed
+        if self.batch_size is not None:
+            data["batch_size"] = self.batch_size
+        if self.capture is not None:
+            data["capture"] = self.capture.as_dict()
+        if self.eval is not None:
+            data["eval"] = self.eval.as_dict()
+        if self.extras:
+            data.update(self.extras)
+        return data
+
+
 @dataclass
 class PipelineConfig:
     version: str
     nodes: List[PipelineNode]
     edges: List[PipelineEdge]
-    run: Mapping[str, Any] = field(default_factory=dict)
+    run: RunConfig = field(default_factory=RunConfig)
 
 
 @dataclass
@@ -64,7 +173,42 @@ class RunManifest:
     started_at: datetime
     ended_at: datetime | None = None
     nodes: MutableMapping[str, NodeRunRecord] = field(default_factory=dict)
+    inputs: Dict[str, List[str]] = field(default_factory=dict)
+    environment: Dict[str, Any] = field(default_factory=dict)
+    hardware: Dict[str, Any] = field(default_factory=dict)
+    batch_size: int | None = None
+    capture: CaptureConfig | None = None
+    eval: EvalConfig | None = None
     extras: Dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "seed": self.seed,
+            "started_at": self.started_at.isoformat(),
+            "ended_at": self.ended_at.isoformat() if self.ended_at else None,
+            "batch_size": self.batch_size,
+            "inputs": {atype: list(ids) for atype, ids in self.inputs.items()},
+            "environment": dict(self.environment),
+            "hardware": dict(self.hardware),
+            "nodes": {
+                node_id: {
+                    "uses": record.uses,
+                    "params": dict(record.params),
+                    "config_hash": record.config_hash,
+                    "model_id": record.model_id,
+                    "metrics": dict(record.metrics),
+                    "warnings": list(record.warnings),
+                    "started_at": record.started_at.isoformat(),
+                    "ended_at": record.ended_at.isoformat(),
+                    "latency_ms": record.latency_ms,
+                }
+                for node_id, record in self.nodes.items()
+            },
+            "capture": self.capture.as_dict() if self.capture else None,
+            "eval": self.eval.as_dict() if self.eval else None,
+            "extras": dict(self.extras),
+        }
 
 
 @dataclass
@@ -114,7 +258,7 @@ class Pipeline:
             raise PipelineError("Configuration must include 'version' and 'pipeline'") from exc
         nodes = [PipelineNode(id=item["id"], uses=item["uses"], params=item.get("params", {})) for item in pipeline.get("nodes", [])]
         edges = [cls._parse_edge(item) for item in pipeline.get("edges", [])]
-        run_cfg = raw.get("run", {})
+        run_cfg = RunConfig.from_mapping(raw.get("run"))
         cfg = PipelineConfig(version=version, nodes=nodes, edges=edges, run=run_cfg)
         return cls(cfg, registry)
 
@@ -158,6 +302,30 @@ class Pipeline:
         params_override: Mapping[str, Mapping[str, Any]] | None = None,
         extras: Mapping[str, Any] | None = None,
     ) -> PipelineRunResult:
+        config_seed = self.config.run.seed
+        base_seed = (
+            seed
+            if seed is not None
+            else (config_seed if config_seed is not None else int(datetime.now(timezone.utc).timestamp()))
+        )
+        started_at = datetime.now(timezone.utc)
+        run_id = hashlib.sha1(f"{base_seed}-{started_at.isoformat()}".encode()).hexdigest()
+        manifest = RunManifest(
+            run_id=run_id,
+            seed=base_seed,
+            started_at=started_at,
+            batch_size=self.config.run.batch_size,
+            capture=replace(self.config.run.capture) if self.config.run.capture else None,
+            eval=replace(self.config.run.eval) if self.config.run.eval else None,
+        )
+        if self.config.run.extras:
+            manifest.extras.update(self.config.run.extras)
+            environment_cfg = self.config.run.extras.get("environment")
+            if isinstance(environment_cfg, Mapping):
+                manifest.environment.update(environment_cfg)
+            hardware_cfg = self.config.run.extras.get("hardware")
+            if isinstance(hardware_cfg, Mapping):
+                manifest.hardware.update(hardware_cfg)
         store = ArtifactStore()
         if initial_artifacts:
             if isinstance(initial_artifacts, Mapping):
@@ -165,11 +333,20 @@ class Pipeline:
                     store.add_many(artifacts, producer_id=None)
             else:
                 store.add_many(initial_artifacts, producer_id=None)
-        base_seed = seed if seed is not None else int(datetime.now(timezone.utc).timestamp())
-        run_id = hashlib.sha1(f"{base_seed}-{datetime.now(timezone.utc).isoformat()}".encode()).hexdigest()
-        manifest = RunManifest(run_id=run_id, seed=base_seed, started_at=datetime.now(timezone.utc))
+            snapshot = store.snapshot()
+            manifest.inputs = {
+                artifact_type: [artifact.id for artifact in artifacts]
+                for artifact_type, artifacts in snapshot.items()
+            }
         if extras:
-            manifest.extras.update(dict(extras))
+            extras_dict = dict(extras)
+            manifest.extras.update(extras_dict)
+            environment = extras_dict.get("environment")
+            if isinstance(environment, Mapping):
+                manifest.environment.update(environment)
+            hardware = extras_dict.get("hardware")
+            if isinstance(hardware, Mapping):
+                manifest.hardware.update(hardware)
         results: Dict[str, TaskResult] = {}
         params_override = params_override or {}
 

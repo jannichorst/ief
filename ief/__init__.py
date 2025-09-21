@@ -22,7 +22,18 @@ from .artifacts import (
     TextLayer,
     TextToken,
 )
-from .pipeline import Pipeline, PipelineConfig, PipelineNode, PipelineEdge, PipelineRunResult
+from .pipeline import (
+    CaptureConfig,
+    EvalConfig,
+    NodeRunRecord,
+    Pipeline,
+    PipelineConfig,
+    PipelineEdge,
+    PipelineNode,
+    PipelineRunResult,
+    RunConfig,
+    RunManifest,
+)
 from .registry import TaskRegistry
 from .tasks import RunContext, Task, TaskResult
 from .trace import Trace
@@ -43,6 +54,11 @@ __all__ = [
     "PipelineEdge",
     "PipelineNode",
     "PipelineRunResult",
+    "RunConfig",
+    "RunManifest",
+    "CaptureConfig",
+    "EvalConfig",
+    "NodeRunRecord",
     "RunContext",
     "SpanRef",
     "Task",

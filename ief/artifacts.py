@@ -83,7 +83,12 @@ class Document(Artifact):
     """Represents an ingested document."""
 
     TYPE: ClassVar[str] = "Document"
-    source: DocumentSource = field(default_factory=DocumentSource)
+    source: DocumentSource | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.source is None:
+            raise ValueError("Document requires a source description")
 
 
 @dataclass
