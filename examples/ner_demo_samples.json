@@ -1,0 +1,10 @@
+[
+  {
+    "id": "doc-001",
+    "text": "Alice Johnson (alice.johnson@example.com) requested a limit increase on her corporate account. For card verification use 4111 1111 1111 1111. Her backup email is ALICE.JOHNSON@example.com for urgent escalations."
+  },
+  {
+    "id": "doc-002",
+    "text": "Bob Rivera joined the payments team. Reach him via bob@example.org or BOB.RIVERA@example.org for deployment updates. Corporate AmEx: 5500-0000-0000-0004."
+  }
+]
