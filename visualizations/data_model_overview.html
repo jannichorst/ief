@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>IEF Data Model Overview</title>
+  <style>
+    body { margin: 0; font-family: 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif; background-color: #0b0c10; color: #f8f9fa; }
+    #graph { width: 100vw; height: 100vh; }
+    #info { position: fixed; top: 16px; left: 16px; max-width: 360px; padding: 12px 16px; background: rgba(0, 0, 0, 0.65); border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.15); overflow-y: auto; max-height: 80vh; }
+    #info h1 { margin: 0 0 12px; font-size: 1.25rem; }
+    #info h2 { margin: 8px 0 4px; font-size: 1.1rem; }
+    #info ul { padding-left: 20px; margin: 4px 0 0; }
+    #info li { margin-bottom: 4px; }
+    code { background: rgba(255, 255, 255, 0.08); padding: 1px 4px; border-radius: 4px; }
+    a { color: #7fc7ff; }
+  </style>
+</head>
+<body>
+  <div id="graph"></div>
+  <div id="info">
+    <h1>IEF Data Model</h1>
+    <p>Drag nodes to explore relationships between artifacts, supporting structures, and provenance traces. Click a node for field details.</p>
+    <p>Edge tooltips list the field names that connect two dataclasses. Inheritance edges are labelled <em>inherits</em>.</p>
+  </div>
+  <script src="https://unpkg.com/force-graph@1.45.0/dist/force-graph.js"></script>
+  <script>
+    const DATA = {
+  "nodes": [
+    {
+      "id": "ArtifactLike",
+      "group": "artifact_base",
+      "doc": "Base class for all typed artifacts.",
+      "doc_html": "Base class for all typed artifacts.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "doc_id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "parents",
+          "type": "tuple[str]",
+          "type_html": "tuple[str]"
+        },
+        {
+          "name": "meta",
+          "type": "MutableMapping[str, Any]",
+          "type_html": "MutableMapping[str, Any]"
+        },
+        {
+          "name": "provenance",
+          "type": "Trace | None",
+          "type_html": "Trace | None"
+        }
+      ],
+      "tooltip": "Base class for all typed artifacts.\nid: str\ndoc_id: str\nparents: tuple[str]\nmeta: MutableMapping[str, Any]\nprovenance: Trace | None"
+    },
+    {
+      "id": "BoundingBox",
+      "group": "support",
+      "doc": "Axis-aligned bounding box.",
+      "doc_html": "Axis-aligned bounding box.",
+      "fields": [
+        {
+          "name": "x0",
+          "type": "float",
+          "type_html": "float"
+        },
+        {
+          "name": "y0",
+          "type": "float",
+          "type_html": "float"
+        },
+        {
+          "name": "x1",
+          "type": "float",
+          "type_html": "float"
+        },
+        {
+          "name": "y1",
+          "type": "float",
+          "type_html": "float"
+        }
+      ],
+      "tooltip": "Axis-aligned bounding box.\nx0: float\ny0: float\nx1: float\ny1: float"
+    },
+    {
+      "id": "Document",
+      "group": "artifact",
+      "doc": "Represents an ingested document.",
+      "doc_html": "Represents an ingested document.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "doc_id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "parents",
+          "type": "tuple[str]",
+          "type_html": "tuple[str]"
+        },
+        {
+          "name": "meta",
+          "type": "MutableMapping[str, Any]",
+          "type_html": "MutableMapping[str, Any]"
+        },
+        {
+          "name": "provenance",
+          "type": "Trace | None",
+          "type_html": "Trace | None"
+        },
+        {
+          "name": "source",
+          "type": "DocumentSource | None",
+          "type_html": "DocumentSource | None"
+        }
+      ],
+      "tooltip": "Represents an ingested document.\nid: str\ndoc_id: str\nparents: tuple[str]\nmeta: MutableMapping[str, Any]\nprovenance: Trace | None\nsource: DocumentSource | None"
+    },
+    {
+      "id": "DocumentSource",
+      "group": "support",
+      "doc": "DocumentSource(mime: 'str', bytes_ref: 'str | None' = None, path: 'str | None' = None, pages: 'int | None' = None)",
+      "doc_html": "DocumentSource(mime: &#x27;str&#x27;, bytes_ref: &#x27;str | None&#x27; = None, path: &#x27;str | None&#x27; = None, pages: &#x27;int | None&#x27; = None)",
+      "fields": [
+        {
+          "name": "mime",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "bytes_ref",
+          "type": "str | None",
+          "type_html": "str | None"
+        },
+        {
+          "name": "path",
+          "type": "str | None",
+          "type_html": "str | None"
+        },
+        {
+          "name": "pages",
+          "type": "int | None",
+          "type_html": "int | None"
+        }
+      ],
+      "tooltip": "DocumentSource(mime: 'str', bytes_ref: 'str | None' = None, path: 'str | None' = None, pages: 'int | None' = None)\nmime: str\nbytes_ref: str | None\npath: str | None\npages: int | None"
+    },
+    {
+      "id": "EntityMention",
+      "group": "artifact",
+      "doc": "Surface mention detected by NER.",
+      "doc_html": "Surface mention detected by NER.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "doc_id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "parents",
+          "type": "tuple[str]",
+          "type_html": "tuple[str]"
+        },
+        {
+          "name": "meta",
+          "type": "MutableMapping[str, Any]",
+          "type_html": "MutableMapping[str, Any]"
+        },
+        {
+          "name": "provenance",
+          "type": "Trace | None",
+          "type_html": "Trace | None"
+        },
+        {
+          "name": "label",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "text",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "span",
+          "type": "SpanRef | None",
+          "type_html": "SpanRef | None"
+        },
+        {
+          "name": "score",
+          "type": "float | None",
+          "type_html": "float | None"
+        },
+        {
+          "name": "evidence",
+          "type": "tuple[SpanRef | str | Mapping[str, Any]]",
+          "type_html": "tuple[SpanRef | str | Mapping[str, Any]]"
+        }
+      ],
+      "tooltip": "Surface mention detected by NER.\nid: str\ndoc_id: str\nparents: tuple[str]\nmeta: MutableMapping[str, Any]\nprovenance: Trace | None\nlabel: str\ntext: str\nspan: SpanRef | None\nscore: float | None\nevidence: tuple[SpanRef | str | Mapping[str, Any]]"
+    },
+    {
+      "id": "KVPair",
+      "group": "artifact",
+      "doc": "Key-value pair extracted from the document.",
+      "doc_html": "Key-value pair extracted from the document.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "doc_id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "parents",
+          "type": "tuple[str]",
+          "type_html": "tuple[str]"
+        },
+        {
+          "name": "meta",
+          "type": "MutableMapping[str, Any]",
+          "type_html": "MutableMapping[str, Any]"
+        },
+        {
+          "name": "provenance",
+          "type": "Trace | None",
+          "type_html": "Trace | None"
+        },
+        {
+          "name": "field",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "value_span",
+          "type": "SpanRef | None",
+          "type_html": "SpanRef | None"
+        },
+        {
+          "name": "key_span",
+          "type": "SpanRef | None",
+          "type_html": "SpanRef | None"
+        },
+        {
+          "name": "normalized_value",
+          "type": "Any | None",
+          "type_html": "Any | None"
+        },
+        {
+          "name": "score",
+          "type": "float | None",
+          "type_html": "float | None"
+        }
+      ],
+      "tooltip": "Key-value pair extracted from the document.\nid: str\ndoc_id: str\nparents: tuple[str]\nmeta: MutableMapping[str, Any]\nprovenance: Trace | None\nfield: str\nvalue_span: SpanRef | None\nkey_span: SpanRef | None\nnormalized_value: Any | None\nscore: float | None"
+    },
+    {
+      "id": "LayoutElement",
+      "group": "support",
+      "doc": "Layout grouping with optional bounding boxes and token references.",
+      "doc_html": "Layout grouping with optional bounding boxes and token references.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "bbox",
+          "type": "BoundingBox | None",
+          "type_html": "BoundingBox | None"
+        },
+        {
+          "name": "polygon",
+          "type": "tuple[tuple[float, float]] | None",
+          "type_html": "tuple[tuple[float, float]] | None"
+        },
+        {
+          "name": "token_indices",
+          "type": "tuple[int]",
+          "type_html": "tuple[int]"
+        }
+      ],
+      "tooltip": "Layout grouping with optional bounding boxes and token references.\nid: str\nbbox: BoundingBox | None\npolygon: tuple[tuple[float, float]] | None\ntoken_indices: tuple[int]"
+    },
+    {
+      "id": "LayoutLayer",
+      "group": "artifact",
+      "doc": "Captures document geometry and grouping.",
+      "doc_html": "Captures document geometry and grouping.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "doc_id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "parents",
+          "type": "tuple[str]",
+          "type_html": "tuple[str]"
+        },
+        {
+          "name": "meta",
+          "type": "MutableMapping[str, Any]",
+          "type_html": "MutableMapping[str, Any]"
+        },
+        {
+          "name": "provenance",
+          "type": "Trace | None",
+          "type_html": "Trace | None"
+        },
+        {
+          "name": "pages",
+          "type": "list[PageGeometry]",
+          "type_html": "list[PageGeometry]"
+        },
+        {
+          "name": "blocks",
+          "type": "list[LayoutElement]",
+          "type_html": "list[LayoutElement]"
+        },
+        {
+          "name": "lines",
+          "type": "list[LayoutElement]",
+          "type_html": "list[LayoutElement]"
+        },
+        {
+          "name": "words",
+          "type": "list[LayoutElement]",
+          "type_html": "list[LayoutElement]"
+        },
+        {
+          "name": "token_map",
+          "type": "dict[int, int] | None",
+          "type_html": "dict[int, int] | None"
+        }
+      ],
+      "tooltip": "Captures document geometry and grouping.\nid: str\ndoc_id: str\nparents: tuple[str]\nmeta: MutableMapping[str, Any]\nprovenance: Trace | None\npages: list[PageGeometry]\nblocks: list[LayoutElement]\nlines: list[LayoutElement]\nwords: list[LayoutElement]\ntoken_map: dict[int, int] | None"
+    },
+    {
+      "id": "PageBox",
+      "group": "support",
+      "doc": "A span of geometry on a page.",
+      "doc_html": "A span of geometry on a page.",
+      "fields": [
+        {
+          "name": "page",
+          "type": "int",
+          "type_html": "int"
+        },
+        {
+          "name": "bbox",
+          "type": "BoundingBox | None",
+          "type_html": "BoundingBox | None"
+        },
+        {
+          "name": "polygon",
+          "type": "tuple[tuple[float, float]] | None",
+          "type_html": "tuple[tuple[float, float]] | None"
+        }
+      ],
+      "tooltip": "A span of geometry on a page.\npage: int\nbbox: BoundingBox | None\npolygon: tuple[tuple[float, float]] | None"
+    },
+    {
+      "id": "PageGeometry",
+      "group": "support",
+      "doc": "Page dimensions and resolution.",
+      "doc_html": "Page dimensions and resolution.",
+      "fields": [
+        {
+          "name": "page",
+          "type": "int",
+          "type_html": "int"
+        },
+        {
+          "name": "width",
+          "type": "float",
+          "type_html": "float"
+        },
+        {
+          "name": "height",
+          "type": "float",
+          "type_html": "float"
+        },
+        {
+          "name": "dpi",
+          "type": "float | None",
+          "type_html": "float | None"
+        }
+      ],
+      "tooltip": "Page dimensions and resolution.\npage: int\nwidth: float\nheight: float\ndpi: float | None"
+    },
+    {
+      "id": "Relation",
+      "group": "artifact",
+      "doc": "Relation between entity mentions.",
+      "doc_html": "Relation between entity mentions.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "doc_id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "parents",
+          "type": "tuple[str]",
+          "type_html": "tuple[str]"
+        },
+        {
+          "name": "meta",
+          "type": "MutableMapping[str, Any]",
+          "type_html": "MutableMapping[str, Any]"
+        },
+        {
+          "name": "provenance",
+          "type": "Trace | None",
+          "type_html": "Trace | None"
+        },
+        {
+          "name": "type",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "args",
+          "type": "tuple[RelationArgument]",
+          "type_html": "tuple[RelationArgument]"
+        },
+        {
+          "name": "score",
+          "type": "float | None",
+          "type_html": "float | None"
+        },
+        {
+          "name": "evidence",
+          "type": "tuple[SpanRef | str | Mapping[str, Any]]",
+          "type_html": "tuple[SpanRef | str | Mapping[str, Any]]"
+        }
+      ],
+      "tooltip": "Relation between entity mentions.\nid: str\ndoc_id: str\nparents: tuple[str]\nmeta: MutableMapping[str, Any]\nprovenance: Trace | None\ntype: str\nargs: tuple[RelationArgument]\nscore: float | None\nevidence: tuple[SpanRef | str | Mapping[str, Any]]"
+    },
+    {
+      "id": "RelationArgument",
+      "group": "support",
+      "doc": "RelationArgument(role: 'str', mention_id: 'str')",
+      "doc_html": "RelationArgument(role: &#x27;str&#x27;, mention_id: &#x27;str&#x27;)",
+      "fields": [
+        {
+          "name": "role",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "mention_id",
+          "type": "str",
+          "type_html": "str"
+        }
+      ],
+      "tooltip": "RelationArgument(role: 'str', mention_id: 'str')\nrole: str\nmention_id: str"
+    },
+    {
+      "id": "SpanRef",
+      "group": "artifact",
+      "doc": "A span linking character offsets to layout geometry.",
+      "doc_html": "A span linking character offsets to layout geometry.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "doc_id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "parents",
+          "type": "tuple[str]",
+          "type_html": "tuple[str]"
+        },
+        {
+          "name": "meta",
+          "type": "MutableMapping[str, Any]",
+          "type_html": "MutableMapping[str, Any]"
+        },
+        {
+          "name": "provenance",
+          "type": "Trace | None",
+          "type_html": "Trace | None"
+        },
+        {
+          "name": "start_char",
+          "type": "int",
+          "type_html": "int"
+        },
+        {
+          "name": "end_char",
+          "type": "int",
+          "type_html": "int"
+        },
+        {
+          "name": "token_span",
+          "type": "tuple[int, int]",
+          "type_html": "tuple[int, int]"
+        },
+        {
+          "name": "page_boxes",
+          "type": "tuple[PageBox]",
+          "type_html": "tuple[PageBox]"
+        }
+      ],
+      "tooltip": "A span linking character offsets to layout geometry.\nid: str\ndoc_id: str\nparents: tuple[str]\nmeta: MutableMapping[str, Any]\nprovenance: Trace | None\nstart_char: int\nend_char: int\ntoken_span: tuple[int, int]\npage_boxes: tuple[PageBox]"
+    },
+    {
+      "id": "TextLayer",
+      "group": "artifact",
+      "doc": "Full document text and tokenisation.",
+      "doc_html": "Full document text and tokenisation.",
+      "fields": [
+        {
+          "name": "id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "doc_id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "parents",
+          "type": "tuple[str]",
+          "type_html": "tuple[str]"
+        },
+        {
+          "name": "meta",
+          "type": "MutableMapping[str, Any]",
+          "type_html": "MutableMapping[str, Any]"
+        },
+        {
+          "name": "provenance",
+          "type": "Trace | None",
+          "type_html": "Trace | None"
+        },
+        {
+          "name": "text",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "tokens",
+          "type": "list[TextToken]",
+          "type_html": "list[TextToken]"
+        },
+        {
+          "name": "reading_order",
+          "type": "list[int] | None",
+          "type_html": "list[int] | None"
+        }
+      ],
+      "tooltip": "Full document text and tokenisation.\nid: str\ndoc_id: str\nparents: tuple[str]\nmeta: MutableMapping[str, Any]\nprovenance: Trace | None\ntext: str\ntokens: list[TextToken]\nreading_order: list[int] | None"
+    },
+    {
+      "id": "TextToken",
+      "group": "support",
+      "doc": "TextToken(i: 'int', start_char: 'int', end_char: 'int', text: 'str', page: 'int | None' = None, bbox: 'BoundingBox | None' = None)",
+      "doc_html": "TextToken(i: &#x27;int&#x27;, start_char: &#x27;int&#x27;, end_char: &#x27;int&#x27;, text: &#x27;str&#x27;, page: &#x27;int | None&#x27; = None, bbox: &#x27;BoundingBox | None&#x27; = None)",
+      "fields": [
+        {
+          "name": "i",
+          "type": "int",
+          "type_html": "int"
+        },
+        {
+          "name": "start_char",
+          "type": "int",
+          "type_html": "int"
+        },
+        {
+          "name": "end_char",
+          "type": "int",
+          "type_html": "int"
+        },
+        {
+          "name": "text",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "page",
+          "type": "int | None",
+          "type_html": "int | None"
+        },
+        {
+          "name": "bbox",
+          "type": "BoundingBox | None",
+          "type_html": "BoundingBox | None"
+        }
+      ],
+      "tooltip": "TextToken(i: 'int', start_char: 'int', end_char: 'int', text: 'str', page: 'int | None' = None, bbox: 'BoundingBox | None' = None)\ni: int\nstart_char: int\nend_char: int\ntext: str\npage: int | None\nbbox: BoundingBox | None"
+    },
+    {
+      "id": "Trace",
+      "group": "trace",
+      "doc": "Execution metadata attached to artifacts produced by a task.",
+      "doc_html": "Execution metadata attached to artifacts produced by a task.",
+      "fields": [
+        {
+          "name": "run_id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "task_id",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "model_id",
+          "type": "str | None",
+          "type_html": "str | None"
+        },
+        {
+          "name": "config_hash",
+          "type": "str",
+          "type_html": "str"
+        },
+        {
+          "name": "started_at",
+          "type": "datetime",
+          "type_html": "datetime"
+        },
+        {
+          "name": "ended_at",
+          "type": "datetime",
+          "type_html": "datetime"
+        },
+        {
+          "name": "parents",
+          "type": "tuple[str]",
+          "type_html": "tuple[str]"
+        },
+        {
+          "name": "features",
+          "type": "dict[str, Any]",
+          "type_html": "dict[str, Any]"
+        },
+        {
+          "name": "warnings",
+          "type": "tuple[str]",
+          "type_html": "tuple[str]"
+        },
+        {
+          "name": "extra",
+          "type": "dict[str, Any]",
+          "type_html": "dict[str, Any]"
+        }
+      ],
+      "tooltip": "Execution metadata attached to artifacts produced by a task.\nrun_id: str\ntask_id: str\nmodel_id: str | None\nconfig_hash: str\nstarted_at: datetime\nended_at: datetime\nparents: tuple[str]\nfeatures: dict[str, Any]\nwarnings: tuple[str]\nextra: dict[str, Any]"
+    }
+  ],
+  "links": [
+    {
+      "source": "ArtifactLike",
+      "target": "Trace",
+      "fields": [
+        "provenance"
+      ]
+    },
+    {
+      "source": "Document",
+      "target": "Trace",
+      "fields": [
+        "provenance"
+      ]
+    },
+    {
+      "source": "Document",
+      "target": "DocumentSource",
+      "fields": [
+        "source"
+      ]
+    },
+    {
+      "source": "Document",
+      "target": "ArtifactLike",
+      "fields": [
+        "inherits"
+      ]
+    },
+    {
+      "source": "EntityMention",
+      "target": "Trace",
+      "fields": [
+        "provenance"
+      ]
+    },
+    {
+      "source": "EntityMention",
+      "target": "SpanRef",
+      "fields": [
+        "evidence",
+        "span"
+      ]
+    },
+    {
+      "source": "EntityMention",
+      "target": "ArtifactLike",
+      "fields": [
+        "inherits"
+      ]
+    },
+    {
+      "source": "KVPair",
+      "target": "Trace",
+      "fields": [
+        "provenance"
+      ]
+    },
+    {
+      "source": "KVPair",
+      "target": "SpanRef",
+      "fields": [
+        "key_span",
+        "value_span"
+      ]
+    },
+    {
+      "source": "KVPair",
+      "target": "ArtifactLike",
+      "fields": [
+        "inherits"
+      ]
+    },
+    {
+      "source": "LayoutElement",
+      "target": "BoundingBox",
+      "fields": [
+        "bbox"
+      ]
+    },
+    {
+      "source": "LayoutLayer",
+      "target": "Trace",
+      "fields": [
+        "provenance"
+      ]
+    },
+    {
+      "source": "LayoutLayer",
+      "target": "PageGeometry",
+      "fields": [
+        "pages"
+      ]
+    },
+    {
+      "source": "LayoutLayer",
+      "target": "LayoutElement",
+      "fields": [
+        "blocks",
+        "lines",
+        "words"
+      ]
+    },
+    {
+      "source": "LayoutLayer",
+      "target": "ArtifactLike",
+      "fields": [
+        "inherits"
+      ]
+    },
+    {
+      "source": "PageBox",
+      "target": "BoundingBox",
+      "fields": [
+        "bbox"
+      ]
+    },
+    {
+      "source": "Relation",
+      "target": "Trace",
+      "fields": [
+        "provenance"
+      ]
+    },
+    {
+      "source": "Relation",
+      "target": "RelationArgument",
+      "fields": [
+        "args"
+      ]
+    },
+    {
+      "source": "Relation",
+      "target": "SpanRef",
+      "fields": [
+        "evidence"
+      ]
+    },
+    {
+      "source": "Relation",
+      "target": "ArtifactLike",
+      "fields": [
+        "inherits"
+      ]
+    },
+    {
+      "source": "SpanRef",
+      "target": "Trace",
+      "fields": [
+        "provenance"
+      ]
+    },
+    {
+      "source": "SpanRef",
+      "target": "PageBox",
+      "fields": [
+        "page_boxes"
+      ]
+    },
+    {
+      "source": "SpanRef",
+      "target": "ArtifactLike",
+      "fields": [
+        "inherits"
+      ]
+    },
+    {
+      "source": "TextLayer",
+      "target": "Trace",
+      "fields": [
+        "provenance"
+      ]
+    },
+    {
+      "source": "TextLayer",
+      "target": "TextToken",
+      "fields": [
+        "tokens"
+      ]
+    },
+    {
+      "source": "TextLayer",
+      "target": "ArtifactLike",
+      "fields": [
+        "inherits"
+      ]
+    },
+    {
+      "source": "TextToken",
+      "target": "BoundingBox",
+      "fields": [
+        "bbox"
+      ]
+    }
+  ]
+};
+    const graphElem = document.getElementById('graph');
+    const infoElem = document.getElementById('info');
+
+    const Graph = ForceGraph()(graphElem)
+      .graphData(DATA)
+      .nodeId('id')
+      .nodeLabel(node => node.tooltip)
+      .nodeAutoColorBy('group')
+      .nodeVal(node => node.group === 'artifact_base' ? 10 : node.group === 'artifact' ? 6 : node.group === 'trace' ? 5 : 4)
+      .linkDirectionalArrowLength(8)
+      .linkDirectionalArrowRelPos(1)
+      .linkCurvature(0.2)
+      .linkLabel(link => `${link.source.id} → ${link.target.id}: ${link.fields.join(', ')}`)
+      .onNodeClick(node => renderDetails(node))
+      .onNodeHover(node => graphElem.style.cursor = node ? 'pointer' : 'default');
+
+    Graph.d3Force('charge').strength(-220);
+
+    function renderDetails(node) {
+      const fieldItems = node.fields
+        .map(entry => `<li><code>${entry.name}</code>: ${entry.type_html}</li>`)
+        .join('');
+      const doc = node.doc_html ? `<p>${node.doc_html}</p>` : '';
+      infoElem.innerHTML = `
+        <h1>${node.id}</h1>
+        ${doc}
+        <h2>Fields</h2>
+        <ul>${fieldItems}</ul>
+      `;
+    }
+
+    window.addEventListener('resize', () => {
+      Graph.width(window.innerWidth);
+      Graph.height(window.innerHeight);
+    });
+  </script>
+</body>
+</html>
